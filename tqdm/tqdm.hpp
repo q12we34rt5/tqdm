@@ -1,5 +1,7 @@
 #pragma once
 
+#include "progress_bar.hpp"
+#include "terminal_utils.hpp"
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -118,9 +120,10 @@ public:
      * @param size The total size of the operation or iterations.
      * @param title The title for the progress bar (defaults to an empty string).
      * @param mininterval The minimum interval between updates in milliseconds (defaults to 100).
-     * @param width The width of the progress bar (defaults to 10).
+     * @param width The width of the progress bar (defaults to 0, which will be set to the width of the terminal).
      */
-    Tqdm(size_t size, const std::string& title = "", long mininterval = 100, int width = 10) : size_{size}, title_{title}, mininterval_{mininterval}, width_{width}
+    Tqdm(size_t size, const std::string& title = "", long mininterval = 100, int width = 0)
+        : size_(size), title_(title), mininterval_(mininterval), width_(width), progress_bar_(0)
     {
         reset();
     }
@@ -173,22 +176,15 @@ public:
             return os;
         }
         tqdm.last_print_time_ = current_print_time;
-        // std::string output = tqdm.first_print_ ? "\0337\0338" : "\0338";
-        std::string output = "\r";
         tqdm.first_print_ = false;
+        std::string output_first_half = "\r";
+        std::string output_second_half = "";
         double processed = double(tqdm.step_) / tqdm.size_;
-        output += tqdm.title_ + " [";
-        for (int i = 0; i < tqdm.width_; i++) {
-            if (double(i) / tqdm.width_ <= processed) {
-                output += "=";
-            } else {
-                output += " ";
-            }
-        }
-        output += "]";
-        output += " " + std::to_string(int(processed * 100)) + "%";
-        output += " " + std::to_string(tqdm.step_) + "/" + std::to_string(tqdm.size_);
-        // calculate remaining time
+        output_first_half += tqdm.title_ + " [";
+        output_second_half += "]";
+        output_second_half += " " + std::to_string(int(processed * 100)) + "%";
+        output_second_half += " " + std::to_string(tqdm.step_) + "/" + std::to_string(tqdm.size_);
+        // calculate estimated, remaining, and passed time
         static auto to_time_string = [](long milliseconds) {
             // format: HH:MM:SS
             std::stringstream ss;
@@ -199,10 +195,16 @@ public:
         };
         auto cost = std::chrono::duration_cast<std::chrono::milliseconds>(tqdm.current_time_ - tqdm.start_time_).count();
         auto estimated_time = tqdm.step_ ? long(int64_t(cost) * tqdm.size_ / tqdm.step_) : 0l;
-        auto remaining_time = tqdm.step_ ? long(int64_t(cost) * (tqdm.size_ - tqdm.step_) / tqdm.step_) : 0l;
+        // auto remaining_time = tqdm.step_ ? long(int64_t(cost) * (tqdm.size_ - tqdm.step_) / tqdm.step_) : 0l;
         auto passed_time = tqdm.step_ ? long(std::chrono::duration_cast<std::chrono::milliseconds>(tqdm.current_time_ - tqdm.start_time_).count()) : 0l;
-        output += " [" + to_time_string(estimated_time) + "<" + to_time_string(passed_time) + "]";
-        return os << output;
+        output_second_half += " [" + to_time_string(estimated_time) + "<" + to_time_string(passed_time) + "]";
+        // calculate progress bar width
+        // if width is set to 0, the width will be automatically set to the width of the terminal
+        int bar_width = (tqdm.width_ ? tqdm.width_ : getTerminalWidth()) - output_first_half.size() - output_second_half.size();
+        if (bar_width < 0) { bar_width = 0; }
+        tqdm.progress_bar_.setWidth(bar_width);
+        tqdm.progress_bar_.setPercentage(processed);
+        return os << output_first_half << tqdm.progress_bar_ << output_second_half;
     }
 
 private:
@@ -215,6 +217,7 @@ private:
     TimeType start_time_;
     TimeType current_time_;
     TimeType last_print_time_;
+    ProgressBar progress_bar_;
 };
 
 /**
@@ -229,12 +232,12 @@ private:
  * @param title The title for the progress bar (defaults to an empty string).
  * @param os The output stream where the progress bar will be displayed (defaults to std::cerr).
  * @param mininterval The minimum interval between updates in milliseconds (defaults to 100).
- * @param width The width of the progress bar (defaults to 10).
+ * @param width The width of the progress bar (defaults to 0, which will be set to the width of the terminal).
  * @return IteratorHook<IteratorType> An IteratorHook instance managing the iteration over the iterator range
  *         with a progress indicator.
  */
 template <class IteratorType>
-IteratorHook<IteratorType> tqdm(const IteratorType& begin_it, const IteratorType& end_it, const std::string& title = "", std::ostream& os = std::cerr, long mininterval = 100, int width = 10)
+IteratorHook<IteratorType> tqdm(const IteratorType& begin_it, const IteratorType& end_it, const std::string& title = "", std::ostream& os = std::cerr, long mininterval = 100, int width = 0)
 {
     size_t size = end_it - begin_it;
     Tqdm tqdm(size, title, mininterval, width);
@@ -260,12 +263,12 @@ IteratorHook<IteratorType> tqdm(const IteratorType& begin_it, const IteratorType
  * @param title The title for the progress bar (defaults to an empty string).
  * @param os The output stream where the progress bar will be displayed (defaults to std::cerr).
  * @param mininterval The minimum interval between updates in milliseconds (defaults to 100).
- * @param width The width of the progress bar (defaults to 10).
+ * @param width The width of the progress bar (defaults to 0, which will be set to the width of the terminal).
  * @return IteratorHook<IteratorType> An IteratorHook instance managing the iteration over the defined range
  *         with a progress indicator using Tqdm.
  */
 template <class IteratorType>
-IteratorHook<IteratorType> tqdm(const IteratorType& begin_it, size_t size, const std::string& title = "", std::ostream& os = std::cerr, long mininterval = 100, int width = 10)
+IteratorHook<IteratorType> tqdm(const IteratorType& begin_it, size_t size, const std::string& title = "", std::ostream& os = std::cerr, long mininterval = 100, int width = 0)
 {
     auto end_it = begin_it;
     std::advance(end_it, size);
@@ -291,12 +294,12 @@ IteratorHook<IteratorType> tqdm(const IteratorType& begin_it, size_t size, const
  * @param title The title for the progress bar (defaults to an empty string).
  * @param os The output stream where the progress bar will be displayed (defaults to std::cerr).
  * @param mininterval The minimum interval between updates in milliseconds (defaults to 100).
- * @param width The width of the progress bar (defaults to 10).
+ * @param width The width of the progress bar (defaults to 0, which will be set to the width of the terminal).
  * @return IteratorHook<typename ContainerType::iterator> An IteratorHook instance managing the iteration
  *         over the container elements with a progress indicator.
  */
 template <class ContainerType>
-auto tqdm(ContainerType&& container, const std::string& title = "", std::ostream& os = std::cerr, long mininterval = 100, int width = 10)
+auto tqdm(ContainerType&& container, const std::string& title = "", std::ostream& os = std::cerr, long mininterval = 100, int width = 0)
 {
     auto begin_it = container.begin(), end_it = container.end();
     size_t size = container.size();
